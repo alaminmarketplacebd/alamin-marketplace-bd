@@ -1,0 +1,106 @@
+name: Extract Alamin Marketplace Website
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Extract Website ZIP Safely
+        run: |
+          python3 - <<'PY'
+          import zipfile
+          import os
+          import shutil
+          from pathlib import PurePosixPath
+
+          archive = "alamin-marketplace-bd.zip"
+
+          if not os.path.isfile(archive):
+              raise SystemExit("ERROR: ZIP file not found.")
+
+          excluded = (
+              ".env",
+              ".git/",
+              "node_modules/",
+              ".firebase/",
+              "dist/",
+              "build/",
+          )
+
+          with zipfile.ZipFile(archive) as z:
+              entries = z.infolist()
+              files = [
+                  i for i in entries
+                  if not i.is_dir()
+              ]
+
+              if not files:
+                  raise SystemExit("ERROR: ZIP is empty.")
+
+              names = [i.filename for i in files]
+
+              # Detect a common top-level folder
+              parts = [PurePosixPath(n).parts for n in names]
+              common = parts[0][0] if all(
+                  len(p) > 1 and p[0] == parts[0][0]
+                  for p in parts
+              ) else None
+
+              for item in files:
+                  name = item.filename.replace("\\", "/")
+                  path = PurePosixPath(name)
+
+                  if path.is_absolute() or ".." in path.parts:
+                      raise SystemExit("Unsafe ZIP path detected.")
+
+                  if common and path.parts[0] == common:
+                      path = PurePosixPath(*path.parts[1:])
+
+                  target = path.as_posix()
+
+                  if not target or target == ".":
+                      continue
+
+                  if any(x in target.split("/") for x in excluded):
+                      continue
+
+                  if target.startswith(".github/workflows/"):
+                      print("Skipped workflow:", target)
+                      continue
+
+                  base = os.path.basename(target).lower()
+
+                  if (
+                      base == ".env"
+                      or base.startswith(".env.")
+                      or base.endswith((".pem", ".key", ".p12", ".pfx"))
+                      or "service-account" in base
+                  ):
+                      print("Skipped sensitive file:", target)
+                      continue
+
+                  os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+
+                  with z.open(item) as src, open(target, "wb") as dst:
+                      shutil.copyfileobj(src, dst)
+
+                  print("Extracted:", target)
+
+          PY
+
+      - name: Commit Website Files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Extract original Alamin Marketplace website" || echo "No changes"
+          git push
